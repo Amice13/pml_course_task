@@ -1,0 +1,147 @@
+<!-- Make sure that the knitr package is installed and loaded. -->
+
+```{r echo=FALSE}
+#install.packages('knitr')
+library(knitr)
+```
+
+<!-- Set options and folders. -->
+
+```{r echo=FALSE}
+opts_chunk$set(dev="png", 
+               dev.args=list(type="cairo"),
+               dpi=96, fig.path="figures/")
+```
+
+<!-- Code for final HTML. -->
+
+# Model for Human Activity Recognition
+
+## Loading and preprocessing the data
+
+HAR has been considered as a potential technology for e-health systems. So Wallace Ugulino and others collected a public domain dataset comprising 165,633 samples of 5 activity classes, gathered from 4 subjects wearing accelerometers mounted on their waist, left thigh, right arm, and right ankle [1]. Part of data which we're going to use for our model can be found here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv.
+I shall use R language [2] to build prediction model of human activity.
+My inspection of raw data shows that there are few mistakes in data columns and date information is not in appropriate format. So we must open and prepocess data. In preprocessing I shall use package "caret" [3].
+
+```{r}
+# Open data from the URL and convert mistakes to NAs
+data <- read.csv('pml-training.csv',header=T, na.strings=c(NA,"","#DIV/0!"),row.names="X")
+
+# Hours of activity can play significant role in prediction algorithm.
+# Let's convert raw timestamps to hours when data were recorded
+mydates= data$raw_timestamp_part_1
+class(mydates) = c('POSIXt','POSIXct')
+mydate = as.POSIXlt(mydates)
+data$hours <- mydate$hour
+
+# Remove variables with NAs
+
+NAs <- apply(data,2,function(x){sum(is.na(x))/length(x)})
+data <- data[,NAs<0.9]
+
+# Remove variables with zero or near zero variance
+library(caret)
+nsv <- nearZeroVar(data,saveMetrics=T)
+data <- data[!nsv$nzv]
+
+# Remove unnecessary timestapms and window number
+
+data <- data[-c(2:5)]
+```
+
+Note, that in this task we shall predict actions of same persons so variable "user_name" is useful for our task.
+If we want to predict actions of another users this variable should be excluded.
+
+## Prediction model building
+
+In this part we're going to use few different algorithms to predict activity class. Then we shall compare theri accuracy and choose the best one. Accuracy will be estimated with cross-validation procedure, i.e. I shall split all training data to training and cross-validation sample. Algorithm will be trained on the first part of data and evaluated on the second part of it. In this part I shall use "kernlab" [4], "caTools" [5] and "randomForest" [6] packages.
+
+```{r}
+# Randomly split the data, keeping proportions of each class
+library(caTools)
+set.seed(123)
+split = sample.split(data$classe, SplitRatio = 0.8)
+
+# Create training and testing sets
+training = subset(data, split == TRUE)
+testing = subset(data, split == FALSE)
+
+# We aslo can try to continue data prepocessing. Let's use PCA
+prComp <- prcomp(data[,!(names(data) %in% c('classe','user_name'))])
+plot(prComp$x[,1],prComp$x[,2],col=data$classe,xlab="PC1",ylab="PC2")
+
+# The plot shows that data isn't linearly separable, so we can avoid PCA.
+# We're trying to predict one of multiple classes so we can use algorithms: CART trees, 
+#Random Forest and Latent Discriminant Analysis
+
+# Let's train models without data normalization
+
+rpart.mod <- train(classe~ ., data=training,method='rpart')
+lda.mod <- train(classe~ ., data=training,method='lda')
+set.seed(123)
+rf.mod <- train(classe~ ., data=training,method='rf')
+
+# Compare accuracy of models
+
+sum(predict(lda.mod,newdata=testing) == testing$classe)/nrow(testing)
+sum(predict(rpart.mod,newdata=testing) == testing$classe)/nrow(testing)
+sum(predict(rf.mod,newdata=testing) == testing$classe)/nrow(testing)
+
+# Note, these estimations are not exhaustive. We can use it because there are no prices of wrong prediction for each class.
+# If we know that some class is more important than others we should look at confusionMatrix() function.
+```
+
+As we can see Random Forest algorithm has the best accuracy. The accuracy is estimated on cross-validation sample so we can predict that accuracy out-of-sample will be near 99%.
+
+## Human Activity Prediction
+
+Let's use the whole training data set to build final prediction model and use this model on the test set (https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv).
+
+```{r}
+# Model building
+rf.mod <- train(classe~ ., data=training,method='rf')
+
+# Open and preprocess test data from the URL
+test <- read.csv('pml-testing.csv',header=T, na.strings=c(NA,"","#DIV/0!"),row.names="X")
+
+mydates= test$raw_timestamp_part_1
+class(mydates) = c('POSIXt','POSIXct')
+mydate = as.POSIXlt(mydates)
+test$hours <- mydate$hour
+
+# Predict human activity with our model
+answ <- predict(rf.mod,test)
+answ
+
+# Use this function to save answers to separate files
+
+#pml_write_files = function(x){
+#  n = length(x)
+#  for(i in 1:n){
+#    filename = paste0("problem_id_",i,".txt")
+#    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+#  }
+#}
+
+#pml_write_files(answ)
+
+```
+
+All 20 cases were predicted correctly. Despite this algorithm can be improved with different techniques such as boosting, averaging and so on. 
+This paper was created with package "knitr" [7] for this task.
+
+
+## References
+
+1. Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6. 
+2. R Core Team (2014). R: A language and environment for statistical computing. R Foundation for Statistical Computing, Vienna,
+  Austria. URL http://www.R-project.org/.
+3. Max Kuhn. Contributions from Jed Wing, Steve Weston, Andre Williams, Chris Keefer, Allan Engelhardt, Tony Cooper, Zachary Mayer
+  and the R Core Team (2014). caret: Classification and Regression Training. R package version 6.0-24.
+  http://CRAN.R-project.org/package=caret
+4. Alexandros Karatzoglou, Alex Smola, Kurt Hornik, Achim Zeileis (2004). kernlab - An S4 Package for Kernel Methods in R. Journal
+  of Statistical Software 11(9), 1-20. URL http://www.jstatsoft.org/v11/i09/
+5. Jarek Tuszynski (2013). caTools: Tools: moving window statistics, GIF, Base64, ROC AUC, etc.. R package version 1.16.
+  http://CRAN.R-project.org/package=caTools.
+6. A. Liaw and M. Wiener (2002). Classification and Regression by randomForest. R News 2(3), 18--22.
+7. Yihui Xie (2013). knitr: A general-purpose package for dynamic report generation in R. R package version 1.5.
